@@ -11,11 +11,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
-import { BookOpen, Save, Wand2, Sparkles, RefreshCw, GitBranch, Globe, Users, Sword, Plus } from "lucide-react"
+import { BookOpen, Save, Wand2, Sparkles, RefreshCw, GitBranch, Globe, Users, Sword, Plus, Trash2 } from "lucide-react"
 import WorkspaceHeader from "@/components/workspace-header"
 import AIGenerationPanel from "@/components/ai-generation-panel"
 import { LocalStorage, type Novel, type Chapter } from "@/lib/local-storage"
 import { useToast } from "@/components/ui/use-toast"
+import { DeleteChapterDialog } from "@/components/delete-chapter-dialog"
 
 export default function Workspace() {
   const params = useParams()
@@ -30,6 +31,8 @@ export default function Workspace() {
   const [isSaving, setIsSaving] = useState(false)
   const [activeTab, setActiveTab] = useState("editor")
   const [isLoading, setIsLoading] = useState(true)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [chapterToDelete, setChapterToDelete] = useState<{id: string, title: string} | null>(null)
 
   // 加载小说和章节
   useEffect(() => {
@@ -257,6 +260,87 @@ ${content.slice(-500)}
     });
   }
 
+  const handleDeleteChapter = (chapterId: string) => {
+    if (!novel) return;
+
+    // 找到要删除的章节
+    const chapter = novel.chapters.find(ch => ch.id === chapterId);
+    if (!chapter) return;
+
+    // 打开确认对话框
+    setChapterToDelete({ id: chapterId, title: chapter.title });
+    setDeleteDialogOpen(true);
+  }
+
+  const confirmDeleteChapter = () => {
+    if (!novel || !chapterToDelete) return;
+
+    try {
+      const chapterId = chapterToDelete.id;
+      const chapterTitle = chapterToDelete.title;
+
+      // 如果要删除的是当前章节，切换到另一个章节
+      let nextChapter = null;
+      if (currentChapter?.id === chapterId) {
+        // 尝试找到下一个章节，如果没有，则找上一个章节
+        const currentIndex = novel.chapters.findIndex(ch => ch.id === chapterId);
+        if (currentIndex < novel.chapters.length - 1) {
+          nextChapter = novel.chapters[currentIndex + 1];
+        } else if (currentIndex > 0) {
+          nextChapter = novel.chapters[currentIndex - 1];
+        }
+      }
+
+      // 更新小说对象，移除要删除的章节
+      const updatedChapters = novel.chapters.filter(ch => ch.id !== chapterId);
+
+      const updatedNovel = {
+        ...novel,
+        chapters: updatedChapters,
+        updated_at: new Date().toISOString(),
+      };
+
+      // 保存到本地存储
+      LocalStorage.saveNovel(updatedNovel);
+
+      // 更新状态
+      setNovel(updatedNovel);
+
+      // 如果删除的是当前章节，切换到下一个章节
+      if (currentChapter?.id === chapterId) {
+        if (nextChapter) {
+          setCurrentChapter(nextChapter);
+          setContent(nextChapter.content || "");
+        } else {
+          // 如果没有其他章节了，清空当前章节和内容
+          setCurrentChapter(null);
+          setContent("");
+        }
+      }
+
+      toast({
+        title: "删除成功",
+        description: `章节 "${chapterTitle}" 已被删除`,
+        variant: "success",
+      });
+
+      // 关闭对话框
+      setDeleteDialogOpen(false);
+      setChapterToDelete(null);
+    } catch (error) {
+      console.error('删除章节错误:', error);
+      toast({
+        title: "删除失败",
+        description: "删除章节时发生错误",
+        variant: "destructive",
+      });
+
+      // 关闭对话框
+      setDeleteDialogOpen(false);
+      setChapterToDelete(null);
+    }
+  };
+
   const handleChapterChange = (chapterId: string) => {
     if (!novel) return
 
@@ -275,11 +359,20 @@ ${content.slice(-500)}
       await handleSaveContent();
 
       // 创建新章节（包含前面所有章节的概要）
-      const newChapterId = await handleCreateChapter(true, false);
+      const newChapterId = await handleCreateChapter(true, true);
 
       if (newChapterId) {
+        // 获取新创建的章节
+        const newChapter = novel.chapters.find(ch => ch.id === newChapterId);
+        if (!newChapter) {
+          throw new Error('新章节创建失败');
+        }
+
         // 自动生成新章节内容
         setIsGenerating(true);
+
+        // 清空编辑器中的概要内容，只保留纯生成内容
+        setContent("");
 
         try {
           // 获取前面所有章节的概要
@@ -310,6 +403,7 @@ ${previousChaptersSummaries}
           console.log('续写下一章提示:', prompt);
 
           // 调用API生成内容
+          console.log('开始调用API生成内容...');
           const result = await fetch('/api/generate', {
             method: 'POST',
             headers: {
@@ -322,12 +416,63 @@ ${previousChaptersSummaries}
             }),
           });
 
+          console.log('API响应状态:', result.status, result.statusText);
+
           if (!result.ok) {
-            const errorData = await result.json();
-            throw new Error(errorData.error || '生成内容失败');
+            let errorMessage = '生成内容失败';
+            try {
+              const errorData = await result.json();
+              errorMessage = errorData.error || errorMessage;
+            } catch (e) {
+              console.error('解析错误响应失败:', e);
+            }
+            throw new Error(errorMessage);
+          }
+
+          // 检查响应类型
+          const contentType = result.headers.get('content-type');
+          console.log('响应内容类型:', contentType);
+
+          if (contentType && contentType.includes('application/json')) {
+            // 如果是JSON响应，直接解析
+            const jsonData = await result.json();
+            console.log('收到JSON响应:', jsonData);
+
+            if (jsonData.error) {
+              throw new Error(jsonData.error);
+            }
+
+            const content = jsonData.content || jsonData.text || '';
+            setContent(content);
+
+            // 保存生成的内容
+            const saveResult = await handleSaveContent();
+
+            if (saveResult) {
+              // 滚动到编辑器顶部，方便用户查看生成的内容
+              const editorElement = document.querySelector('.flex-1.min-h-0.focus-visible\\:ring-0');
+              if (editorElement) {
+                editorElement.scrollTop = 0;
+              }
+
+              toast({
+                title: "续写成功",
+                description: "已自动创建并生成下一章内容",
+                variant: "success",
+              });
+            } else {
+              toast({
+                title: "生成成功但保存失败",
+                description: "请手动保存生成的内容",
+                variant: "warning",
+              });
+            }
+
+            return;
           }
 
           // 读取流式响应
+          console.log('开始读取流式响应...');
           const reader = result.body?.getReader();
           if (!reader) {
             throw new Error('无法读取响应流');
@@ -336,32 +481,67 @@ ${previousChaptersSummaries}
           let generatedContent = '';
           let decoder = new TextDecoder();
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
 
-            const chunk = decoder.decode(value, { stream: true });
-            generatedContent += chunk;
+              const chunk = decoder.decode(value, { stream: true });
+              console.log('收到数据块:', chunk.length > 50 ? chunk.substring(0, 50) + '...' : chunk);
+              generatedContent += chunk;
 
-            // 实时更新内容
-            setContent(prevContent => prevContent + chunk);
+              // 实时更新内容
+              setContent(prevContent => prevContent + chunk);
+            }
+            console.log('流式响应读取完成，总长度:', generatedContent.length);
+          } catch (readError) {
+            console.error('读取流式响应错误:', readError);
+            throw new Error('读取生成内容时发生错误: ' + readError.message);
           }
 
           // 保存生成的内容
-          await handleSaveContent();
+          const saveResult = await handleSaveContent();
 
-          toast({
-            title: "续写成功",
-            description: "已自动创建并生成下一章内容",
-            variant: "success",
-          });
+          if (saveResult) {
+            // 滚动到编辑器顶部，方便用户查看生成的内容
+            const editorElement = document.querySelector('.flex-1.min-h-0.focus-visible\\:ring-0');
+            if (editorElement) {
+              editorElement.scrollTop = 0;
+            }
+
+            toast({
+              title: "续写成功",
+              description: "已自动创建并生成下一章内容",
+              variant: "success",
+            });
+          } else {
+            toast({
+              title: "生成成功但保存失败",
+              description: "请手动保存生成的内容",
+              variant: "warning",
+            });
+          }
         } catch (error) {
           console.error('生成下一章内容错误:', error);
+
+          // 尝试获取更详细的错误信息
+          let errorMessage = error instanceof Error ? error.message : "生成下一章内容时发生错误";
+
+          // 显示更友好的错误提示
           toast({
             title: "生成失败",
-            description: error instanceof Error ? error.message : "生成下一章内容时发生错误",
+            description: errorMessage,
             variant: "destructive",
           });
+
+          // 如果是API调用错误，尝试使用备用提示重试
+          if (errorMessage.includes('API') || errorMessage.includes('调用') || errorMessage.includes('响应')) {
+            toast({
+              title: "提示",
+              description: "您可以点击保存按钮保存当前内容，然后手动创建新章节",
+              variant: "default",
+            });
+          }
         } finally {
           setIsGenerating(false);
         }
@@ -432,8 +612,21 @@ ${previousChaptersSummaries}
 
       // 如果需要切换到新章节，则更新当前章节和内容
       if (switchToNewChapter) {
+        // 先设置当前章节，再设置内容，确保状态一致
         setCurrentChapter(newChapter)
         setContent(newChapter.content || "")
+
+        // 滚动到章节列表中的新章节
+        setTimeout(() => {
+          const chapterElement = document.getElementById(`chapter-${newChapter.id}`);
+          if (chapterElement) {
+            chapterElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            chapterElement.classList.add('bg-green-100');
+            setTimeout(() => {
+              chapterElement.classList.remove('bg-green-100');
+            }, 2000);
+          }
+        }, 100);
 
         toast({
           title: "创建成功",
@@ -473,6 +666,19 @@ ${previousChaptersSummaries}
 
   return (
     <div className="container mx-auto py-4 flex flex-col h-screen">
+      {/* 删除章节确认对话框 */}
+      {deleteDialogOpen && chapterToDelete && (
+        <DeleteChapterDialog
+          isOpen={deleteDialogOpen}
+          onClose={() => {
+            setDeleteDialogOpen(false);
+            setChapterToDelete(null);
+          }}
+          onConfirm={confirmDeleteChapter}
+          chapterTitle={chapterToDelete.title}
+        />
+      )}
+
       <WorkspaceHeader novel={novel} />
 
       <div className="flex-1 flex mt-4 overflow-hidden">
@@ -574,16 +780,30 @@ ${previousChaptersSummaries}
                     <div className="space-y-1">
                       {novel.chapters.length > 0 ? (
                         novel.chapters.map((chapter) => (
-                          <div key={chapter.id} className="mb-2">
-                            <Button
-                              id={`chapter-${chapter.id}`}
-                              variant={currentChapter?.id === chapter.id ? "default" : "ghost"}
-                              className={`w-full justify-start text-left ${currentChapter?.id === chapter.id ? "bg-purple-100 text-purple-800 hover:bg-purple-200" : ""}`}
-                              size="sm"
-                              onClick={() => handleChapterChange(chapter.id)}
-                            >
-                              {chapter.title}
-                            </Button>
+                          <div key={chapter.id} className="mb-2 relative group">
+                            <div className="flex">
+                              <Button
+                                id={`chapter-${chapter.id}`}
+                                variant={currentChapter?.id === chapter.id ? "default" : "ghost"}
+                                className={`w-full justify-start text-left ${currentChapter?.id === chapter.id ? "bg-purple-100 text-purple-800 hover:bg-purple-200" : ""}`}
+                                size="sm"
+                                onClick={() => handleChapterChange(chapter.id)}
+                              >
+                                {chapter.title}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="p-0 h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity absolute right-0"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteChapter(chapter.id);
+                                }}
+                                title="删除章节"
+                              >
+                                <Trash2 className="h-4 w-4 text-red-500" />
+                              </Button>
+                            </div>
                             {chapter.summary && (
                               <div className="text-xs text-gray-500 mt-1 ml-2 line-clamp-2">
                                 {chapter.summary.length > 100 ? chapter.summary.substring(0, 100) + "..." : chapter.summary}
