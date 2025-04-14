@@ -4,6 +4,7 @@ export interface AIGenerationPrompt {
   prompt: string
   type?: "novel" | "character" | "world" | "chapter" | "outline"
   style?: string
+  model?: string // 添加模型参数
 }
 
 export interface AIGenerationResult {
@@ -89,7 +90,8 @@ export const ApiService = {
 
       // 构建请求体
       const requestBody = {
-        model: settings.model,
+        // 优先使用传入的模型，如果没有则使用设置中的模型
+        model: data.model || settings.model,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: prompt },
@@ -100,6 +102,8 @@ export const ApiService = {
           response_format: { type: "json_object" }
         } : {}),
       };
+
+      console.log('使用模型:', data.model || settings.model);
 
       console.log("请求体:", JSON.stringify(requestBody, null, 2));
 

@@ -28,13 +28,25 @@ export default function AIGenerationPanel({ novelId, onContentGenerated }: AIGen
   const [novel, setNovel] = useState<Novel | null>(null)
   const [useBackgroundInfo, setUseBackgroundInfo] = useState(true)
 
-  // 加载小说信息
+  // 加载小说信息和用户设置
+  const [userSettings, setUserSettings] = useState(LocalStorage.getSettings())
+
   useEffect(() => {
+    // 加载小说信息
     if (novelId) {
       const novelData = LocalStorage.getNovelById(novelId)
       if (novelData) {
         setNovel(novelData)
       }
+    }
+
+    // 加载用户设置
+    const settings = LocalStorage.getSettings()
+    setUserSettings(settings)
+
+    // 如果有自定义文风，默认选择它
+    if (settings.customWritingStyle) {
+      setStyle(settings.customWritingStyle)
     }
   }, [novelId])
 
@@ -132,11 +144,20 @@ export default function AIGenerationPanel({ novelId, onContentGenerated }: AIGen
       console.log("使用类型:", type);
       console.log("文风:", styleHint);
 
+      // 获取用户设置中的模型和文风
+      const customStyle = settings.customWritingStyle;
+      console.log('自定义文风:', customStyle || '未设置，使用面板文风');
+
+      // 优先使用面板中选择的文风，如果没有设置则使用用户自定义文风
+      const finalStyle = styleHint || customStyle;
+      console.log('最终使用文风:', finalStyle || '无文风指定');
+
       // 调用 API 生成内容
       const result = await ApiService.generateContent({
         prompt: finalPrompt,
         type,
-        style: styleHint,
+        style: finalStyle,
+        model: settings.model, // 传递模型名称
       })
 
       console.log("API返回结果:", result);
@@ -238,11 +259,20 @@ export default function AIGenerationPanel({ novelId, onContentGenerated }: AIGen
                   <SelectValue placeholder="选择文风" />
                 </SelectTrigger>
                 <SelectContent>
+                  {/* 如果有自定义文风，显示在最上面 */}
+                  {userSettings.customWritingStyle && (
+                    <SelectItem value={userSettings.customWritingStyle} className="font-semibold text-purple-600">
+                      {userSettings.customWritingStyle} (自定义)
+                    </SelectItem>
+                  )}
                   <SelectItem value="古风">古风</SelectItem>
                   <SelectItem value="现代">现代</SelectItem>
                   <SelectItem value="武侠">武侠</SelectItem>
                   <SelectItem value="玄幻">玄幻</SelectItem>
                   <SelectItem value="科幻">科幻</SelectItem>
+                  <SelectItem value="情感">情感</SelectItem>
+                  <SelectItem value="幽默">幽默</SelectItem>
+                  <SelectItem value="浪漫">浪漫</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -363,6 +393,8 @@ export default function AIGenerationPanel({ novelId, onContentGenerated }: AIGen
             <input
               type="checkbox"
               id="use-background"
+              title="使用小说背景信息"
+              placeholder="使用小说背景信息"
               checked={useBackgroundInfo}
               onChange={(e) => setUseBackgroundInfo(e.target.checked)}
               className="rounded border-gray-300 text-purple-600 focus:ring-purple-500"

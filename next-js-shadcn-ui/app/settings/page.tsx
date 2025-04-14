@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { LocalStorage, type UserSettings } from "@/lib/local-storage"
 import { useToast } from "@/components/ui/use-toast"
-import { ArrowLeft, Save, ExternalLink } from "lucide-react"
+import { ArrowLeft, Save, ExternalLink, CheckCircle, RefreshCw } from "lucide-react"
 import Link from "next/link"
 
 export default function SettingsPage() {
@@ -16,8 +16,10 @@ export default function SettingsPage() {
     apiKey: "",
     model: "gemini-2.5-pro-preview-03-25",
     theme: "light",
+    customWritingStyle: "", // 添加自定义文风字段
   })
   const [isSaving, setIsSaving] = useState(false)
+  const [saveSuccess, setSaveSuccess] = useState(false) // 添加保存成功状态
   const { toast } = useToast()
 
   useEffect(() => {
@@ -27,20 +29,43 @@ export default function SettingsPage() {
   }, [])
 
   const handleSave = () => {
+    // 重置保存成功状态
+    setSaveSuccess(false)
+    // 显示保存中状态
     setIsSaving(true)
+
     try {
+      // 保存设置
       LocalStorage.saveSettings(settings)
-      toast({
-        title: "设置已保存",
-        description: "您的设置已成功保存",
-      })
+
+      // 添加延迟，增强用户体验
+      setTimeout(() => {
+        // 显示成功通知
+        toast({
+          title: "设置已保存",
+          description: "您的设置已成功保存",
+          variant: "success", // 使用成功样式，更明显
+        })
+
+        // 设置保存成功状态
+        setSaveSuccess(true)
+        // 重置保存状态
+        setIsSaving(false)
+
+        // 3秒后重置成功状态
+        setTimeout(() => {
+          setSaveSuccess(false)
+        }, 3000)
+      }, 800) // 添加延迟，增强用户体验
     } catch (error) {
+      // 显示错误通知
       toast({
         title: "保存失败",
         description: "保存设置时发生错误",
         variant: "destructive",
       })
-    } finally {
+
+      // 重置保存状态
       setIsSaving(false)
     }
   }
@@ -102,6 +127,17 @@ export default function SettingsPage() {
             <p className="text-sm text-muted-foreground">选择用于生成内容的 AI 模型，不同模型有不同的能力和价格</p>
           </div>
 
+          <div className="space-y-2">
+            <Label htmlFor="customWritingStyle">自定义文风</Label>
+            <Input
+              id="customWritingStyle"
+              placeholder="例如：古风、现代、湿潮、简洁、详尽、幽默、浪漫等"
+              value={settings.customWritingStyle}
+              onChange={(e) => setSettings({ ...settings, customWritingStyle: e.target.value })}
+            />
+            <p className="text-sm text-muted-foreground">设置默认的文风，将应用于生成的内容。留空则使用系统默认文风</p>
+          </div>
+
           <div className="mt-6 p-4 bg-purple-50 rounded-md">
             <h3 className="text-sm font-medium text-purple-800 mb-2">关于 API 服务</h3>
             <p className="text-sm text-purple-700 mb-2">
@@ -114,10 +150,24 @@ export default function SettingsPage() {
           </div>
         </CardContent>
         <CardFooter>
-          <Button onClick={handleSave} disabled={isSaving} className="w-full bg-purple-600 hover:bg-purple-700">
+          <Button
+            onClick={handleSave}
+            disabled={isSaving}
+            className={`w-full transition-colors duration-300 ${isSaving
+              ? 'bg-blue-600 hover:bg-blue-700'
+              : saveSuccess
+                ? 'bg-green-600 hover:bg-green-700'
+                : 'bg-purple-600 hover:bg-purple-700'}`}
+          >
             {isSaving ? (
               <>
-                <span className="mr-2">保存中...</span>
+                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                保存中...
+              </>
+            ) : saveSuccess ? (
+              <>
+                <CheckCircle className="mr-2 h-4 w-4" />
+                保存成功
               </>
             ) : (
               <>

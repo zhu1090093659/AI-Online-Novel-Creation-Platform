@@ -115,6 +115,13 @@ ${content.slice(-500)}
 
       console.log('生成提示:', prompt);
 
+      // 获取用户设置中的模型和文风
+      const settings = LocalStorage.getSettings();
+      const modelName = settings.model || "gpt-3.5-turbo";
+      const customStyle = settings.customWritingStyle;
+      console.log('使用模型:', modelName);
+      console.log('自定义文风:', customStyle || '未设置，使用默认文风');
+
       // 使用ApiService生成内容
       const result = await fetch('/api/generate', {
         method: 'POST',
@@ -124,7 +131,9 @@ ${content.slice(-500)}
         body: JSON.stringify({
           prompt,
           type: "chapter",
-          style: novel.genre === "仙侠" || novel.genre === "玄幻" ? "古风" : "现代",
+          // 优先使用自定义文风，如果没有设置则根据小说类型选择默认文风
+          style: customStyle || (novel.genre === "仙侠" || novel.genre === "玄幻" ? "古风" : "现代"),
+          model: modelName, // 传递模型名称
         }),
       });
 
@@ -171,10 +180,16 @@ ${content.slice(-500)}
 
   const handleSaveContent = async () => {
     return new Promise<boolean>((resolve) => {
+      console.log('开始保存内容...');
       if (!novel || !currentChapter) {
+        console.error('保存失败: novel 或 currentChapter 为空');
         resolve(false);
         return;
       }
+
+      console.log('当前小说ID:', novel.id);
+      console.log('当前章节ID:', currentChapter.id);
+      console.log('内容长度:', content.length);
 
       // 显示保存状态
       setIsSaving(true)
@@ -355,152 +370,142 @@ ${content.slice(-500)}
     if (!novel || !currentChapter) return;
 
     try {
+      console.log('开始续写下一章流程...');
+      console.log('当前小说ID:', novel.id);
+      console.log('当前章节数:', novel.chapters.length);
+
       // 先保存当前章节
-      await handleSaveContent();
+      console.log('保存当前章节...');
+      const saveResult = await handleSaveContent();
+      console.log('保存结果:', saveResult);
 
       // 创建新章节（包含前面所有章节的概要）
-      const newChapterId = await handleCreateChapter(true, true);
+      console.log('开始创建新章节...');
+      const newChapterId = await handleCreateChapter(true, false); // 不自动切换到新章节，手动处理
+      console.log('新章节ID:', newChapterId);
 
-      if (newChapterId) {
-        // 获取新创建的章节
-        const newChapter = novel.chapters.find(ch => ch.id === newChapterId);
-        if (!newChapter) {
-          throw new Error('新章节创建失败');
+      if (!newChapterId) {
+        throw new Error('创建新章节失败，未返回ID');
+      }
+
+      // 从 LocalStorage 获取最新的小说数据
+      console.log('从 LocalStorage 获取最新小说数据...');
+      const updatedNovel = LocalStorage.getNovelById(novel.id);
+      if (!updatedNovel) {
+        throw new Error('获取小说数据失败');
+      }
+      console.log('更新后的章节数:', updatedNovel.chapters.length);
+
+      // 获取新创建的章节
+      console.log('尝试获取新章节:', newChapterId);
+      const newChapter = updatedNovel.chapters.find(ch => ch.id === newChapterId);
+      if (!newChapter) {
+        console.error('新章节未找到，所有章节ID:', updatedNovel.chapters.map(ch => ch.id));
+        throw new Error('新章节创建失败，无法找到新章节');
+      }
+      console.log('找到新章节:', newChapter.title);
+
+      // 手动切换到新章节
+      setCurrentChapter(newChapter);
+      setContent(newChapter.content || "");
+
+      // 更新小说状态，确保使用最新数据
+      setNovel(updatedNovel);
+
+      // 自动生成新章节内容
+      setIsGenerating(true);
+
+      // 清空编辑器中的概要内容，只保留纯生成内容
+      setContent("");
+
+      try {
+        // 获取前面所有章节的概要
+        console.log('获取前面章节概要...');
+        const previousChapters = updatedNovel.chapters
+          .sort((a, b) => a.order_index - b.order_index);
+
+        let previousChaptersSummaries = "";
+        if (previousChapters.length > 0) {
+          previousChaptersSummaries = previousChapters.map((chapter, index) => {
+            let chapterSummary = chapter.summary;
+            if (!chapterSummary && chapter.content) {
+              const content = chapter.content.trim();
+              chapterSummary = content.length > 150 ? content.substring(0, 150) + "..." : content;
+            }
+
+            return chapterSummary ? `第${index + 1}章【${chapter.title}】: ${chapterSummary}` : "";
+          }).filter(Boolean).join("\n\n");
         }
+        console.log('概要长度:', previousChaptersSummaries.length);
 
-        // 自动生成新章节内容
-        setIsGenerating(true);
-
-        // 清空编辑器中的概要内容，只保留纯生成内容
-        setContent("");
-
-        try {
-          // 获取前面所有章节的概要
-          const previousChapters = novel.chapters
-            .sort((a, b) => a.order_index - b.order_index);
-
-          let previousChaptersSummaries = "";
-          if (previousChapters.length > 0) {
-            previousChaptersSummaries = previousChapters.map((chapter, index) => {
-              let chapterSummary = chapter.summary;
-              if (!chapterSummary && chapter.content) {
-                const content = chapter.content.trim();
-                chapterSummary = content.length > 150 ? content.substring(0, 150) + "..." : content;
-              }
-
-              return chapterSummary ? `第${index + 1}章【${chapter.title}】: ${chapterSummary}` : "";
-            }).filter(Boolean).join("\n\n");
-          }
-
-          // 构建简单的提示
-          const prompt = `请为我的小说《${novel.title}》创作下一章的内容。小说类型是${novel.genre}。
+        // 构建简单的提示
+        const prompt = `请为我的小说《${updatedNovel.title}》创作下一章的内容。小说类型是${updatedNovel.genre}。
 
 前面章节概要：
 ${previousChaptersSummaries}
 
 请创作新的一章，保持故事的连贯性和一致性，推动情节发展。`;
 
-          console.log('续写下一章提示:', prompt);
+        console.log('续写下一章提示:', prompt.substring(0, 100) + '...');
 
-          // 调用API生成内容
-          console.log('开始调用API生成内容...');
-          const result = await fetch('/api/generate', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              prompt,
-              type: "chapter",
-              style: novel.genre === "仙侠" || novel.genre === "玄幻" ? "古风" : "现代",
-            }),
-          });
+        // 获取用户设置中的模型和文风
+        const settings = LocalStorage.getSettings();
+        const modelName = settings.model || "gpt-3.5-turbo";
+        const customStyle = settings.customWritingStyle;
+        console.log('使用模型:', modelName);
+        console.log('自定义文风:', customStyle || '未设置，使用默认文风');
 
-          console.log('API响应状态:', result.status, result.statusText);
+        // 调用API生成内容
+        console.log('开始调用API生成内容...');
+        const result = await fetch('/api/generate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt,
+            type: "chapter",
+            // 优先使用自定义文风，如果没有设置则根据小说类型选择默认文风
+            style: customStyle || (updatedNovel.genre === "仙侠" || updatedNovel.genre === "玄幻" ? "古风" : "现代"),
+            model: modelName, // 传递模型名称
+          }),
+        });
 
-          if (!result.ok) {
-            let errorMessage = '生成内容失败';
-            try {
-              const errorData = await result.json();
-              errorMessage = errorData.error || errorMessage;
-            } catch (e) {
-              console.error('解析错误响应失败:', e);
-            }
-            throw new Error(errorMessage);
-          }
+        console.log('API响应状态:', result.status, result.statusText);
 
-          // 检查响应类型
-          const contentType = result.headers.get('content-type');
-          console.log('响应内容类型:', contentType);
-
-          if (contentType && contentType.includes('application/json')) {
-            // 如果是JSON响应，直接解析
-            const jsonData = await result.json();
-            console.log('收到JSON响应:', jsonData);
-
-            if (jsonData.error) {
-              throw new Error(jsonData.error);
-            }
-
-            const content = jsonData.content || jsonData.text || '';
-            setContent(content);
-
-            // 保存生成的内容
-            const saveResult = await handleSaveContent();
-
-            if (saveResult) {
-              // 滚动到编辑器顶部，方便用户查看生成的内容
-              const editorElement = document.querySelector('.flex-1.min-h-0.focus-visible\\:ring-0');
-              if (editorElement) {
-                editorElement.scrollTop = 0;
-              }
-
-              toast({
-                title: "续写成功",
-                description: "已自动创建并生成下一章内容",
-                variant: "success",
-              });
-            } else {
-              toast({
-                title: "生成成功但保存失败",
-                description: "请手动保存生成的内容",
-                variant: "warning",
-              });
-            }
-
-            return;
-          }
-
-          // 读取流式响应
-          console.log('开始读取流式响应...');
-          const reader = result.body?.getReader();
-          if (!reader) {
-            throw new Error('无法读取响应流');
-          }
-
-          let generatedContent = '';
-          let decoder = new TextDecoder();
-
+        if (!result.ok) {
+          let errorMessage = '生成内容失败';
           try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-
-              const chunk = decoder.decode(value, { stream: true });
-              console.log('收到数据块:', chunk.length > 50 ? chunk.substring(0, 50) + '...' : chunk);
-              generatedContent += chunk;
-
-              // 实时更新内容
-              setContent(prevContent => prevContent + chunk);
-            }
-            console.log('流式响应读取完成，总长度:', generatedContent.length);
-          } catch (readError) {
-            console.error('读取流式响应错误:', readError);
-            throw new Error('读取生成内容时发生错误: ' + readError.message);
+            const errorData = await result.json();
+            errorMessage = errorData.error || errorMessage;
+          } catch (e) {
+            console.error('解析错误响应失败:', e);
           }
+          throw new Error(errorMessage);
+        }
+
+        // 检查响应类型
+        const contentType = result.headers.get('content-type');
+        console.log('响应内容类型:', contentType);
+
+        if (contentType && contentType.includes('application/json')) {
+          // 如果是JSON响应，直接解析
+          console.log('尝试解析JSON响应...');
+          const jsonData = await result.json();
+          console.log('收到JSON响应:', jsonData);
+
+          if (jsonData.error) {
+            throw new Error(jsonData.error);
+          }
+
+          const content = jsonData.content || jsonData.text || '';
+          console.log('提取到内容长度:', content.length);
+          setContent(content);
 
           // 保存生成的内容
+          console.log('保存生成的内容...');
           const saveResult = await handleSaveContent();
+          console.log('保存结果:', saveResult);
 
           if (saveResult) {
             // 滚动到编辑器顶部，方便用户查看生成的内容
@@ -521,51 +526,119 @@ ${previousChaptersSummaries}
               variant: "warning",
             });
           }
-        } catch (error) {
-          console.error('生成下一章内容错误:', error);
 
-          // 尝试获取更详细的错误信息
-          let errorMessage = error instanceof Error ? error.message : "生成下一章内容时发生错误";
-
-          // 显示更友好的错误提示
-          toast({
-            title: "生成失败",
-            description: errorMessage,
-            variant: "destructive",
-          });
-
-          // 如果是API调用错误，尝试使用备用提示重试
-          if (errorMessage.includes('API') || errorMessage.includes('调用') || errorMessage.includes('响应')) {
-            toast({
-              title: "提示",
-              description: "您可以点击保存按钮保存当前内容，然后手动创建新章节",
-              variant: "default",
-            });
-          }
-        } finally {
-          setIsGenerating(false);
+          return; // 如果是JSON响应，处理完毕后直接返回
         }
+
+        // 读取流式响应
+        console.log('开始读取流式响应...');
+        const reader = result.body?.getReader();
+        if (!reader) {
+          throw new Error('无法读取响应流');
+        }
+
+        let generatedContent = '';
+        let decoder = new TextDecoder();
+
+        try {
+          console.log('开始读取流式数据...');
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              console.log('流式数据读取完成');
+              break;
+            }
+
+            const chunk = decoder.decode(value, { stream: true });
+            console.log('收到数据块:', chunk.length > 50 ? chunk.substring(0, 50) + '...' : chunk);
+            generatedContent += chunk;
+
+            // 实时更新内容
+            setContent(prevContent => prevContent + chunk);
+          }
+          console.log('流式响应读取完成，总长度:', generatedContent.length);
+        } catch (readError) {
+          console.error('读取流式响应错误:', readError);
+          throw new Error('读取生成内容时发生错误: ' + readError.message);
+        }
+
+        // 保存生成的内容
+        console.log('保存流式生成的内容...');
+        const saveResult = await handleSaveContent();
+        console.log('保存结果:', saveResult);
+
+        if (saveResult) {
+          // 滚动到编辑器顶部，方便用户查看生成的内容
+          const editorElement = document.querySelector('.flex-1.min-h-0.focus-visible\\:ring-0');
+          if (editorElement) {
+            editorElement.scrollTop = 0;
+          }
+
+          toast({
+            title: "续写成功",
+            description: "已自动创建并生成下一章内容",
+            variant: "success",
+          });
+        } else {
+          toast({
+            title: "生成成功但保存失败",
+            description: "请手动保存生成的内容",
+            variant: "warning",
+          });
+        }
+      } catch (error) {
+        console.error('生成下一章内容错误:', error);
+
+        // 尝试获取更详细的错误信息
+        let errorMessage = error instanceof Error ? error.message : "生成下一章内容时发生错误";
+
+        // 显示更友好的错误提示
+        toast({
+          title: "生成失败",
+          description: errorMessage,
+          variant: "destructive",
+        });
+
+        // 如果是API调用错误，尝试使用备用提示重试
+        if (errorMessage.includes('API') || errorMessage.includes('调用') || errorMessage.includes('响应')) {
+          toast({
+            title: "提示",
+            description: "您可以点击保存按钮保存当前内容，然后手动创建新章节",
+            variant: "default",
+          });
+        }
+      } finally {
+        setIsGenerating(false);
       }
     } catch (error) {
       console.error('续写下一章错误:', error);
       toast({
         title: "续写失败",
-        description: "创建下一章时发生错误",
+        description: "创建下一章时发生错误: " + (error instanceof Error ? error.message : String(error)),
         variant: "destructive",
       });
     }
   };
 
   const handleCreateChapter = async (includeContext = true, switchToNewChapter = true) => {
-    if (!novel) return null;
+    if (!novel) {
+      console.error('创建章节失败: novel 为空');
+      return null;
+    }
 
     try {
+      console.log('开始创建新章节...');
+      console.log('当前小说ID:', novel.id);
+      console.log('当前章节数:', novel.chapters.length);
+
       const now = new Date().toISOString()
       const newIndex = novel.chapters.length + 1
+      console.log('新章节索引:', newIndex);
 
       // 获取前面所有章节的概要，用于上下文连贯
       let previousChaptersSummaries = "";
       if (includeContext && novel.chapters.length > 0) {
+        console.log('获取前面章节概要...');
         // 按章节顺序排序
         const sortedChapters = [...novel.chapters].sort((a, b) => a.order_index - b.order_index);
 
@@ -580,11 +653,16 @@ ${previousChaptersSummaries}
 
           return chapterSummary ? `第${index + 1}章【${chapter.title}】: ${chapterSummary}` : "";
         }).filter(Boolean).join("\n\n");
+        console.log('概要长度:', previousChaptersSummaries.length);
       }
 
       // 创建新章节
+      console.log('生成新章节ID...');
+      const newChapterId = LocalStorage.generateId();
+      console.log('新章节ID:', newChapterId);
+
       const newChapter: Chapter = {
-        id: LocalStorage.generateId(),
+        id: newChapterId,
         novel_id: novel.id,
         title: `第${newIndex}章`,
         content: previousChaptersSummaries ? `【前文概要】
@@ -596,18 +674,24 @@ ${previousChaptersSummaries}
         updated_at: now,
         previous_chapter_id: novel.chapters.length > 0 ? novel.chapters[novel.chapters.length - 1].id : null,
       }
+      console.log('新章节对象创建完成');
 
       // 更新小说对象
+      console.log('更新小说对象...');
       const updatedNovel = {
         ...novel,
         chapters: [...novel.chapters, newChapter],
         updated_at: now,
       }
+      console.log('更新后的章节数:', updatedNovel.chapters.length);
 
       // 保存到本地存储
+      console.log('保存到本地存储...');
       LocalStorage.saveNovel(updatedNovel)
+      console.log('保存完成');
 
       // 更新状态
+      console.log('更新React状态...');
       setNovel(updatedNovel)
 
       // 如果需要切换到新章节，则更新当前章节和内容

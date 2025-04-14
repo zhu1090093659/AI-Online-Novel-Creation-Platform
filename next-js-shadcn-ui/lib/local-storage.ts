@@ -64,6 +64,7 @@ export interface UserSettings {
   apiKey: string
   model: string
   theme: string
+  customWritingStyle: string // 自定义文风
 }
 
 // 默认设置
@@ -71,6 +72,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   apiKey: "",
   model: "gemini-2.5-pro-preview-03-25",
   theme: "light",
+  customWritingStyle: "", // 默认为空
 }
 
 // 本地存储服务

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -12,7 +12,7 @@ import { GitBranch, GitMerge, GitCompare, GitCommit, ArrowLeft, RefreshCw } from
 import { useToast } from "@/components/ui/use-toast"
 import { LocalStorage, type Novel } from "@/lib/local-storage"
 
-export default function BranchManagement() {
+function BranchManagementContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const { toast } = useToast()
@@ -295,5 +295,13 @@ export default function BranchManagement() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function BranchManagement() {
+  return (
+    <Suspense fallback={<div className="container mx-auto py-8">加载中...</div>}>
+      <BranchManagementContent />
+    </Suspense>
   )
 }
